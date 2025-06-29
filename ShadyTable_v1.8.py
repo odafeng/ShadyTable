@@ -83,20 +83,42 @@ if uploaded_file:
 else:
     df = None
 
-
 # Step 2: 選擇變項
 if df is not None:
+    if "cat_vars_selected" not in st.session_state:
+        st.session_state["cat_vars_selected"] = []
+    if "cont_vars_selected" not in st.session_state:
+        st.session_state["cont_vars_selected"] = []
+
     st.markdown(f"### {ICON_CONFIG} <span style='color:{SECONDARY_COLOR}'>Step 2: 選擇變項</span>", unsafe_allow_html=True)
     all_columns = df.columns.tolist()
 
     with st.form("var_select_form"):
-        group_var = st.selectbox("🧩 分組變項（限兩組）", ["(No Grouping)"] + all_columns)
-        cat_vars = st.multiselect("🔠 類別變項", all_columns)
-        cont_vars = st.multiselect("🔢 連續變項", [col for col in all_columns if col not in cat_vars])
+        group_var = st.selectbox("🧩 分組變項（支援多組比較）", ["(No Grouping)"] + all_columns)
+        st.markdown("⚠️ 類別變項與連續變項請勿重複選擇，以免影響統計分析結果。")
+        # 類別變項
+        cat_vars = st.multiselect(
+            "🔠 類別變項",
+            all_columns,
+            default=st.session_state["cat_vars_selected"]
+        )
+
+        # 連續變項候選
+        cont_candidates = all_columns
+        cont_vars = st.multiselect(
+            "🔢 連續變項",
+            cont_candidates,
+            default=[c for c in st.session_state["cont_vars_selected"] if c in cont_candidates]
+        )
+
         fill_na = st.checkbox("🩹 自動填補缺值（平均/眾數）", value=True)
         submitted = st.form_submit_button("✅ 確認")
 
     if submitted:
+        st.session_state["cat_vars_selected"] = cat_vars
+        st.session_state["cont_vars_selected"] = cont_vars
+        st.session_state["group"] = None if group_var == "(No Grouping)" else group_var
+
         if fill_na:
             df = df.copy()
             for col in cont_vars:
@@ -106,37 +128,35 @@ if df is not None:
             st.info("已填補缺值。")
 
         st.session_state["df"] = df
-        st.session_state["group"] = None if group_var == "(No Grouping)" else group_var
-        st.session_state["cat"] = cat_vars
-        st.session_state["cont"] = cont_vars
         st.success("✅ 變項選擇完成。")
+        st.rerun()
 
-# Step 3: 統計分析與呈現
-        st.markdown(f"### {ICON_STATS} <span style='color:{SECONDARY_COLOR}'>Step 3: 統計分析與結果呈現</span>", unsafe_allow_html=True)
+# Step 3: 分析與呈現
+if "df" in st.session_state:
+    df = st.session_state["df"]
+    group_var = st.session_state["group"]
+    cat_vars = st.session_state["cat_vars_selected"]
+    cont_vars = st.session_state["cont_vars_selected"]
 
-    if "df" in st.session_state:
-        df = st.session_state["df"]
-        group_var = st.session_state["group"]
-        cat_vars = st.session_state["cat"]
-        cont_vars = st.session_state["cont"]
+    st.markdown(f"### {ICON_STATS} <span style='color:{SECONDARY_COLOR}'>Step 3: 統計分析與結果呈現</span>", unsafe_allow_html=True)
 
-                # 計算每個 group 的有效樣本數
-        group_labels = []
-        if group_var:
+    # 計算每個 group 的有效樣本數
+    group_labels = []
+    if group_var:
             group_counts = df[group_var].value_counts(dropna=False).to_dict()
             group_labels = [f"{g} (n={group_counts[g]})" for g in group_counts.keys()]
-        else:
+    else:
             group_labels = ["Overall"]
 
-        result_rows = []
+    result_rows = []
 
-        def normality_test(data):
+    def normality_test(data):
             if len(data.dropna()) < 3:
                 return False
             p = stats.shapiro(data.dropna())[1]
             return p > 0.05
 
-        def format_continuous(series):
+    def format_continuous(series):
             mean = series.mean()
             std = series.std()
             median = series.median()
@@ -144,7 +164,7 @@ if df is not None:
             q3 = series.quantile(0.75)
             return f"{mean:.1f} ± {std:.1f}", f"{median:.1f} [{q1:.1f}-{q3:.1f}]"
 
-        def format_p(p):
+    def format_p(p):
             if p < 0.001:
                 return "<0.001***"
             elif p < 0.01:
@@ -155,7 +175,7 @@ if df is not None:
                 return f"{p:.3f}"
 
         # 類別變項
-        for var in cat_vars:
+    for var in cat_vars:
             total = len(df)
             raw_df = st.session_state.get("raw_df", df)
             na_pct = raw_df[var].isna().mean() * 100
@@ -201,20 +221,19 @@ if df is not None:
             result_rows.extend(sub_rows)
 
         # 連續變項
-        for var in cont_vars:
+    for var in cont_vars:
             total = len(df)
             raw_df = st.session_state.get("raw_df", df)
             na_pct = raw_df[var].isna().mean() * 100
             s = df[var]
             is_normal = normality_test(s)
-            method = "t-test" if is_normal else "Mann–Whitney U"
-
+            method = ""
             row_header = {
                 "Variable": f"**{var}**",
                 "Missing (%)": f"{na_pct:.1f}%",
                 "P": "",
                 "Normality": "Yes" if is_normal else "No",
-                "Method": method
+                "Method": ""
             }
             row = {"Variable": "　Value", "Missing (%)": "", "P": "", "Normality": "", "Method": ""}
 
@@ -225,49 +244,62 @@ if df is not None:
                     label = f"{g} (n={group_counts[g]})"
                     row[label] = mean_std if is_normal else med_iqr
 
-                if len(group_samples) == 2:
+                if len(group_samples) >= 3:
+                    if is_normal:
+                        _, p = stats.f_oneway(*group_samples)
+                        method = "One-way ANOVA"
+                    else:
+                        _, p = stats.kruskal(*group_samples)
+                        method = "Kruskal–Wallis"
+                    row_header["P"] = format_p(p)
+                    row_header["Method"] = method
+                elif len(group_samples) == 2:
                     if is_normal:
                         _, p = stats.ttest_ind(*group_samples, nan_policy="omit")
+                        method = "t-test"
                     else:
                         _, p = stats.mannwhitneyu(*group_samples)
+                        method = "Mann–Whitney U"
                     row_header["P"] = format_p(p)
+                    row_header["Method"] = method
                 else:
                     row_header["P"] = "-"
             else:
                 mean_std, med_iqr = format_continuous(s.dropna())
                 row["Overall"] = mean_std if is_normal else med_iqr
                 row_header["P"] = "-"
+                row_header["Method"] = "-"
 
             result_rows.append(row_header)
             result_rows.append(row)
 
-        table1 = pd.DataFrame(result_rows)
+    table1 = pd.DataFrame(result_rows)
 
         # 重排欄位：Variable, [Group(s)], Missing (%), P, Normality, Method
-        fixed_cols = ["Variable", "Missing (%)", "P", "Normality", "Method"]
-        dynamic_cols = [col for col in table1.columns if col not in fixed_cols]
-        col_order = ["Variable"] + dynamic_cols + ["Missing (%)", "P", "Normality", "Method"]
-        table1 = table1[col_order]
+    fixed_cols = ["Variable", "Missing (%)", "P", "Normality", "Method"]
+    dynamic_cols = [col for col in table1.columns if col not in fixed_cols]
+    col_order = ["Variable"] + dynamic_cols + ["Missing (%)", "P", "Normality", "Method"]
+    table1 = table1[col_order]
 
-        st.subheader("📄 Table 1 統計摘要")
-        st.dataframe(table1, use_container_width=True)
+    st.subheader("📄 Table 1 統計摘要")
+    st.dataframe(table1, use_container_width=True)
 
         # Step 4: 匯出
-        st.markdown("---")
-        st.markdown(f"### {ICON_EXPORT} <span style='color:{SECONDARY_COLOR}'>Step 4: 匯出結果</span>", unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
+    st.markdown("---")
+    st.markdown(f"### {ICON_EXPORT} <span style='color:{SECONDARY_COLOR}'>Step 4: 匯出結果</span>", unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
 
-        with col1:
+    with col1:
             def export_to_excel(df):
                 output = BytesIO()
                 df.to_excel(output, index=False)
                 output.seek(0)
                 return output
 
-            excel_data = export_to_excel(table1)
+            excel_data = export_to_excel(table1.drop(columns=["Normality", "Missing (%)"], errors="ignore"))
             st.download_button("📥 匯出 Excel", data=excel_data, file_name="Table1_Shady.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        with col2:
+    with col2:
             def export_to_word(df):
                 doc = Document()
                 doc.add_heading("Table 1 Summary", level=1)
@@ -287,14 +319,14 @@ if df is not None:
                 word_stream.seek(0)
                 return word_stream
 
-            word_data = export_to_word(table1)
+            word_data = export_to_word(table1.drop(columns=["Normality", "Missing (%)"], errors="ignore"))
             st.download_button("📝 匯出 Word", data=word_data, file_name="Table1_Shady.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
         # Step 5: 產出文字摘要
-        st.markdown("---")
-        st.markdown(f"### 🤖 <span style='color:{SECONDARY_COLOR}'>Step 5: 自動產出 Results 段落</span>", unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown(f"### 🤖 <span style='color:{SECONDARY_COLOR}'>Step 5: 自動產出 Results 段落</span>", unsafe_allow_html=True)
 
-        if st.button("🧠 使用 ChatGPT 撰寫結果摘要"):
+    if st.button("🧠 使用 ChatGPT 撰寫結果摘要"):
             with st.spinner("🤖 正在請 ChatGPT 撰寫摘要，請稍候..."):
                 try:
                     from openai import OpenAI
@@ -340,5 +372,3 @@ if df is not None:
                     )
                 except Exception as e:
                     st.error(f"❌ 發生錯誤：{e}")
-
-

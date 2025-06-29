@@ -1,0 +1,73 @@
+======2025/06/26======
+Version 1.0 初版誕生
+功能總覽：
+Step 1：資料上傳與個資偵測
+✅ 支援 .csv 與 .xlsx 上傳格式
+✅ 自動處理常見缺值標記（NA、na、空白）
+✅ 自動偵測可能包含個資的欄位（例如：姓名、病歷號）並提出警告
+✅ 將原始未處理的資料保留於 st.session_state["raw_df"] 供後續使用
+
+Step 2：變項選擇與缺值處理
+✅ 使用者可指定：
+　　分組變項（可選擇不分組，只支援兩組比較）
+　　類別變項（categorical）
+　　連續變項（continuous）
+
+✅ 勾選「自動填補缺值」時：
+　　連續變項以平均數填補
+　　類別變項以眾數填補
+
+✅ 計算各變項缺值百分比(基於原始未填補資料)
+
+
+Step 3：統計分析與 Table 1 呈現
+✅ 類別變項：
+    顯示每一層級的頻數與百分比
+    自動選擇檢定方法（Chi-square 或 Fisher's exact test）
+
+✅ 連續變項：
+    判定常態性（Shapiro-Wilk test）
+    正態分布使用 t-test，非正態使用 Mann–Whitney U test
+    顯示平均±標準差與中位數 [IQR]
+
+✅ 顯示各變項的：
+Missing (%)
+正態性
+採用檢定方法
+p 值（含星號註記）
+
+📄 Table 1 格式優化與輸出
+✅ 表格格式符合醫學論文 Table 1 慣例
+    主變項加粗
+    子變項縮排
+    不重複顯示變項名稱
+✅ 可匯出為：
+    📥 Excel 檔（.xlsx）
+    📝 Word 檔（.docx）
+
+
+Step 5：自動生成 Results 段落（ChatGPT）
+✅ 使用 OpenAI GPT-4 API，根據 Table 1 自動撰寫英文 Results 段落
+✅ 僅作統計描述，不進行推論
+✅ 使用 .env 格式從 ./keys.env 載入 API 金鑰
+✅ 加入 st.spinner() 提示 ChatGPT 正在運算
+✅ 顯示生成結果於頁面文字區塊
+✅ 可匯出結果段落為 Word 檔（Results_Shady.docx）
+
+
+======2025/06/29======
+ShadyTable v1.8 上線，支援多組比較
+
+▲變項選擇邏輯修正
+保留使用者先前選取變項的狀態：透過 st.session_state["cat_vars_selected"] 與 ["cont_vars_selected"] 來記錄，避免按下確認後被清空。
+解決重複點選問題：修正了按下確認後需重新指定連續變項的 bug。
+增加防呆提醒：加入提示「⚠️ 類別變項與連續變項請勿重複選擇」，提醒使用者避免變項重複指定。
+
+▲分析功能擴充
+支援三組以上比較分析：
+若分組變項為三組以上，連續變項會自動切換為 ANOVA 或 Kruskal-Wallis 分析。
+正態分佈 → One-way ANOVA；非正態 → Kruskal-Wallis。
+保持自動填補缺值機制（平均／眾數），並依選項決定是否執行。
+
+▲匯出功能調整
+匯出至 Excel / Word 時，會自動排除非必要欄位（如 Normality, Missing (%)），使輸出表格更為精簡。
